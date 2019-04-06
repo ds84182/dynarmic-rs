@@ -8,20 +8,6 @@ const PAGE_LOWER_MASK: u32 = (1 << PAGE_BITS) - 1;
 const PAGE_UPPER_MASK: u32 = !PAGE_LOWER_MASK;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 
-pub enum PageSpanKind {
-    Normal {
-        backing: Cell<Box<[u8]>>,
-    },
-    MMIO {
-        handler: Cell<Option<Box<IOPage>>>,
-    }
-}
-
-pub trait IOPage {
-    fn read(&mut self, o: usize, b: &mut [u8]);
-    fn write(&mut self, o: usize, b: &[u8]);
-}
-
 pub trait Primitive: Sized {
     const ALIGN: usize = Self::SIZE - 1;
     const SIZE: usize = std::mem::size_of::<Self>();
@@ -80,6 +66,26 @@ impl<T: Primitive + Copy + Default> Primitive for [T; 2] {
     }
 }
 
+pub trait Memory {
+    fn read<T: Primitive>(&self, addr: u32) -> T;
+    fn write<T: Primitive>(&self, addr: u32, value: T);
+    fn is_read_only(&self, addr: u32) -> bool;
+}
+
+pub enum PageSpanKind {
+    Normal {
+        backing: Cell<Box<[u8]>>,
+    },
+    MMIO {
+        handler: Cell<Option<Box<IOPage>>>,
+    }
+}
+
+pub trait IOPage {
+    fn read(&mut self, o: usize, b: &mut [u8]);
+    fn write(&mut self, o: usize, b: &[u8]);
+}
+
 impl PageSpanKind {
     fn read<T: Primitive>(&self, offset: usize) -> T {
         let offset = offset & !T::ALIGN;
@@ -127,7 +133,7 @@ pub struct PageSpan {
     read_only: bool,
 }
 
-pub struct Memory {
+pub struct MemoryImpl {
     pages: BTreeMap<u32, PageSpan>, // Page -> PageSpan mapping
 }
 
@@ -136,9 +142,9 @@ struct MemoryLookup<T> {
     offset: u32, // Offset from start of item
 }
 
-impl Memory {
-    pub fn new() -> Memory {
-        Memory {
+impl MemoryImpl {
+    pub fn new() -> MemoryImpl {
+        MemoryImpl {
             pages: Default::default()
         }
     }
@@ -184,20 +190,22 @@ impl Memory {
 
         self.pages.insert(addr >> PAGE_BITS, page_span);
     }
+}
 
-    pub fn read<T: Primitive>(&self, addr: u32) -> T {
+impl Memory for MemoryImpl {
+    fn read<T: Primitive>(&self, addr: u32) -> T {
         let page = (addr & !PAGE_LOWER_MASK) >> PAGE_BITS;
         let MemoryLookup { item, offset } = self.lookup(page).expect("Unmapped memory access");
         item.kind.read((offset as usize) + (addr & PAGE_LOWER_MASK) as usize)
     }
 
-    pub fn write<T: Primitive>(&self, addr: u32, value: T) {
+    fn write<T: Primitive>(&self, addr: u32, value: T) {
         let page = (addr & !PAGE_LOWER_MASK) >> PAGE_BITS;
         let MemoryLookup { item, offset } = self.lookup(page).expect("Unmapped memory access");
         item.kind.write((offset as usize) + (addr & PAGE_LOWER_MASK) as usize, value)
     }
 
-    pub fn is_read_only(&self, addr: u32) -> bool {
+    fn is_read_only(&self, addr: u32) -> bool {
         self.lookup((addr & PAGE_UPPER_MASK) >> PAGE_BITS).unwrap().item.read_only
     }
 }
@@ -208,14 +216,14 @@ mod tests {
 
     #[test]
     fn empty_mem_lookup_fails() {
-        let mem = Memory::new();
+        let mem = MemoryImpl::new();
         assert!(mem.lookup(0).is_none());
         assert!(mem.lookup(1).is_none());
     }
 
     #[test]
     fn single_page_lookup_works() {
-        let mut mem = Memory::new();
+        let mut mem = MemoryImpl::new();
         mem.map_memory(0, 1, false);
         assert!(mem.lookup(0).is_some());
         assert!(mem.lookup(1).is_none());
@@ -223,7 +231,7 @@ mod tests {
 
     #[test]
     fn multi_page_lookup_works() {
-        let mut mem = Memory::new();
+        let mut mem = MemoryImpl::new();
         mem.map_memory(0, 2, false);
         assert!(mem.lookup(0).is_some());
         assert!(mem.lookup(1).is_some());

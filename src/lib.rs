@@ -1,21 +1,25 @@
-mod memory;
+pub mod memory;
 
 use dynarmic_sys::*;
 use std::cell::{RefCell, Ref, RefMut};
 
-pub struct Context {
-    memory: RefCell<memory::Memory>,
-    svc_handler: Option<Box<SvcHandler>>,
-    ticks: u64,
+use memory::Memory;
+
+pub trait Handlers: Sized {
+    type Memory: Memory;
+
+    fn memory(&self) -> &Self::Memory;
+    
+    fn handle_svc(&mut self, _context: JitContext, _swi: u32) {}
 }
 
-pub trait SvcHandler {
-    fn handle_svc(&mut self, context: JitContext, swi: u32);
+pub struct Context<H: Handlers> {
+    handlers: H,
+    ticks: u64,
 }
 
 pub struct JitContext<'a> {
     jit: RefCell<&'a mut Jit>,
-    context: &'a Context,
 }
 
 impl<'a> JitContext<'a> {
@@ -54,22 +58,10 @@ impl<'a> JitContext<'a> {
     pub fn halt(&self) {
         unsafe { dynarmic_halt(*self.jit.borrow()) }
     }
-
-    pub fn read<T: memory::Primitive>(&self, addr: u32) -> T {
-        self.context.memory.borrow().read(addr)
-    }
-
-    pub fn write<T: memory::Primitive>(&self, addr: u32, value: T) {
-        self.context.memory.borrow().write(addr, value)
-    }
-
-    pub fn map_memory(&self, addr: u32, pages: u32, read_only: bool) {
-        self.context.memory.borrow_mut().map_memory(addr, pages, read_only);
-    }
 }
 
-impl Context {
-    fn from_jit<'a, 'b: 'a>(jit: &'a mut Jit) -> &'b mut Context {
+impl<H: Handlers> Context<H> {
+    fn from_jit<'a, 'b: 'a>(jit: &'a mut Jit) -> &'b mut Self {
         let ud = unsafe {
             dynarmic_get_userdata(jit)
         };
@@ -77,24 +69,23 @@ impl Context {
     }
 
     extern fn read<T: memory::Primitive>(jit: &mut Jit, addr: u32) -> T {
-        Context::from_jit(jit).memory.borrow().read(addr)
+        Self::from_jit(jit).handlers.memory().read(addr)
     }
 
     extern fn write<T: memory::Primitive>(jit: &mut Jit, addr: u32, value: T) {
-        Context::from_jit(jit).memory.borrow().write(addr, value)
+        Self::from_jit(jit).handlers.memory().write(addr, value)
     }
 
     extern fn is_read_only_memory(jit: &mut Jit, addr: u32) -> bool {
-        Context::from_jit(jit).memory.borrow().is_read_only(addr)
+        Self::from_jit(jit).handlers.memory().is_read_only(addr)
     }
 
     extern fn call_svc(jit: &mut Jit, svc: u32) {
-        let context = Context::from_jit(jit);
-        let mut handler = context.svc_handler.take().expect("No svc handler installed");
+        let context = Self::from_jit(jit);
         let jit_context = JitContext {
-            context, jit: RefCell::new(jit),
+            jit: RefCell::new(jit),
         };
-        handler.handle_svc(jit_context, svc);
+        context.handlers.handle_svc(jit_context, svc);
     }
 
     extern fn exception_raised(jit: &mut Jit, addr: u32, ex: Exception) {
@@ -102,12 +93,12 @@ impl Context {
     }
 
     extern fn add_ticks(jit: &mut Jit, ticks: u64) {
-        let ctx = Context::from_jit(jit);
+        let ctx = Self::from_jit(jit);
         ctx.ticks = ctx.ticks.saturating_sub(ticks);
     }
 
     extern fn get_ticks_remaining(jit: &mut Jit) -> u64 {
-        let ctx = Context::from_jit(jit);
+        let ctx = Self::from_jit(jit);
         ctx.ticks
     }
 
@@ -130,24 +121,23 @@ impl Context {
     }
 }
 
-pub struct Executor {
+pub struct Executor<H: Handlers> {
     jit: &'static mut Jit,
-    context: Box<Context>,
+    _context: Box<Context<H>>,
 }
 
-impl Executor {
-    pub fn new(svc_handler: Option<Box<SvcHandler>>) -> Executor {
+impl<H: Handlers> Executor<H> {
+    pub fn new(handlers: H) -> Self {
         let mut context = Box::new(Context {
-            memory: RefCell::new(memory::Memory::new()),
-            svc_handler,
+            handlers,
             ticks: std::u64::MAX,
         });
 
-        let callbacks = Context::callbacks();
+        let callbacks = Context::<H>::callbacks();
 
         let jit = unsafe {
             dynarmic_new(
-                context.as_mut() as *mut Context as *mut _,
+                context.as_mut() as *mut Context<H> as *mut _,
                 &callbacks,
                 None
             )
@@ -155,7 +145,7 @@ impl Executor {
 
         Executor {
             jit,
-            context
+            _context: context
         }
     }
 
@@ -166,12 +156,11 @@ impl Executor {
     pub fn context(&mut self) -> JitContext {
         JitContext {
             jit: RefCell::new(self.jit),
-            context: &self.context,
         }
     }
 }
 
-impl Drop for Executor {
+impl<H: Handlers> Drop for Executor<H> {
     fn drop(&mut self) {
         unsafe { dynarmic_delete(self.jit) }
     }
@@ -179,16 +168,36 @@ impl Drop for Executor {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use super::*;
     #[test]
     fn it_works() {
-        let mut executor = Executor::new(None);
+        struct TestHandlers {
+            memory: Rc<memory::MemoryImpl>,
+        }
+
+        impl Handlers for TestHandlers {
+            type Memory = memory::MemoryImpl;
+
+            fn memory(&self) -> &Self::Memory {
+                &self.memory
+            }
+        }
+
+        let mut mem = memory::MemoryImpl::new();
+
+        mem.map_memory(0x00000000, 1, true);
+        mem.write(0, 0x0088u16);
+        mem.write(2, 0xE7FEu16);
+
+        let handlers = TestHandlers {
+            memory: Rc::new(mem)
+        };
+
+        let mut executor = Executor::new(handlers);
 
         {
             let context = executor.context();
-            context.map_memory(0x00000000, 1, true);
-            context.write(0, 0x0088u16);
-            context.write(2, 0xE7FEu16);
 
             context.set_cpsr(0x30); // Thumb mode
 
