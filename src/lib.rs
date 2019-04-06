@@ -23,43 +23,43 @@ impl<'a> JitContext<'a> {
         Ref::map(self.jit.borrow(), |jit| unsafe { dynarmic_regs(jit) })
     }
 
-    pub fn regs_mut(&'a self) -> RefMut<[u32; 16]> {
+    pub fn regs_mut(&self) -> RefMut<[u32; 16]> {
         RefMut::map(self.jit.borrow_mut(), |jit| unsafe { dynarmic_regs_mut(jit) })
     }
 
-    pub fn extregs(&'a self) -> Ref<[u32; 64]> {
+    pub fn extregs(&self) -> Ref<[u32; 64]> {
         Ref::map(self.jit.borrow(), |jit| unsafe { dynarmic_extregs(jit) })
     }
 
-    pub fn extregs_mut(&'a self) -> RefMut<[u32; 64]> {
+    pub fn extregs_mut(&self) -> RefMut<[u32; 64]> {
         RefMut::map(self.jit.borrow_mut(), |jit| unsafe { dynarmic_extregs_mut(jit) })
     }
 
-    pub fn cpsr(&'a self) -> u32 {
+    pub fn cpsr(&self) -> u32 {
         unsafe { dynarmic_cpsr(*self.jit.borrow()) }
     }
 
-    pub fn set_cpsr(&'a self, cpsr: u32) {
+    pub fn set_cpsr(&self, cpsr: u32) {
         unsafe { dynarmic_set_cpsr(*self.jit.borrow(), cpsr) }
     }
 
-    pub fn fpscr(&'a self) -> u32 {
+    pub fn fpscr(&self) -> u32 {
         unsafe { dynarmic_fpscr(*self.jit.borrow()) }
     }
 
-    pub fn set_fpscr(&'a self, fpscr: u32) {
+    pub fn set_fpscr(&self, fpscr: u32) {
         unsafe { dynarmic_set_fpscr(*self.jit.borrow(), fpscr) }
     }
 
-    pub fn halt(&'a self) {
+    pub fn halt(&self) {
         unsafe { dynarmic_halt(*self.jit.borrow()) }
     }
 
-    pub fn read<T: memory::Primitive>(&'a self, addr: u32) -> T {
+    pub fn read<T: memory::Primitive>(&self, addr: u32) -> T {
         self.context.memory.borrow().read(addr)
     }
 
-    pub fn write<T: memory::Primitive>(&'a self, addr: u32, value: T) {
+    pub fn write<T: memory::Primitive>(&self, addr: u32, value: T) {
         self.context.memory.borrow().write(addr, value)
     }
 
