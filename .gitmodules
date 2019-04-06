@@ -1,0 +1,3 @@
+[submodule "dynarmic-sys/dynarmic"]
+	path = dynarmic-sys/dynarmic
+	url = https://github.com/MerryMage/dynarmic.git

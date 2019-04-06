@@ -1,0 +1,9 @@
+[package]
+name = "dynarmic"
+version = "0.1.0"
+authors = ["Dwayne Slater <ds84182@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+dynarmic-sys = { path = "dynarmic-sys" }
+byteorder = "1.3"

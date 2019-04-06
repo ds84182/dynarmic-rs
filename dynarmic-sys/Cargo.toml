@@ -1,0 +1,10 @@
+[package]
+name = "dynarmic-sys"
+version = "0.1.0"
+authors = ["Dwayne Slater <ds84182@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+
+[build-dependencies]
+cmake = "0.1"

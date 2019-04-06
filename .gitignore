@@ -1,0 +1,4 @@
+/target
+dynarmic-sys/target
+**/*.rs.bk
+Cargo.lock
