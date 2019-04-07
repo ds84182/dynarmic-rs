@@ -69,11 +69,15 @@ impl<H: Handlers> Context<H> {
     }
 
     extern fn read<T: memory::Primitive>(jit: &mut Jit, addr: u32) -> T {
-        Self::from_jit(jit).handlers.memory().read(addr)
+        let context = Self::from_jit(jit);
+        // println!("Read {:X} at PC {:X?}", addr, JitContext { jit: RefCell::new(jit) }.regs());
+        context.handlers.memory().read(addr)
     }
 
     extern fn write<T: memory::Primitive>(jit: &mut Jit, addr: u32, value: T) {
-        Self::from_jit(jit).handlers.memory().write(addr, value)
+        let context = Self::from_jit(jit);
+        // println!("Write {:X} at PC {:X?}", addr, JitContext { jit: RefCell::new(jit) }.regs());
+        context.handlers.memory().write(addr, value)
     }
 
     extern fn is_read_only_memory(jit: &mut Jit, addr: u32) -> bool {

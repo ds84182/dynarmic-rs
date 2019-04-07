@@ -195,14 +195,24 @@ impl MemoryImpl {
 impl Memory for MemoryImpl {
     fn read<T: Primitive>(&self, addr: u32) -> T {
         let page = (addr & !PAGE_LOWER_MASK) >> PAGE_BITS;
-        let MemoryLookup { item, offset } = self.lookup(page).expect("Unmapped memory access");
-        item.kind.read((offset as usize) + (addr & PAGE_LOWER_MASK) as usize)
+        let MemoryLookup { item, offset } = match self.lookup(page) {
+            Some(l) => l,
+            None => {
+                panic!("Unmapped memory read at {:X}", addr);
+            }
+        };
+        item.kind.read(((offset << PAGE_BITS) as usize) + (addr & PAGE_LOWER_MASK) as usize)
     }
 
     fn write<T: Primitive>(&self, addr: u32, value: T) {
         let page = (addr & !PAGE_LOWER_MASK) >> PAGE_BITS;
-        let MemoryLookup { item, offset } = self.lookup(page).expect("Unmapped memory access");
-        item.kind.write((offset as usize) + (addr & PAGE_LOWER_MASK) as usize, value)
+        let MemoryLookup { item, offset } = match self.lookup(page) {
+            Some(l) => l,
+            None => {
+                panic!("Unmapped memory write at {:X}", addr);
+            }
+        };
+        item.kind.write(((offset << PAGE_BITS) as usize) + (addr & PAGE_LOWER_MASK) as usize, value)
     }
 
     fn is_read_only(&self, addr: u32) -> bool {
