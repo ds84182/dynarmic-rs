@@ -43,7 +43,7 @@ const PAGE_BITS: usize = 12;
 const NUM_PAGE_TABLE_ENTRIES: usize = 1 << (32 - PAGE_BITS);
 
 extern {
-    pub fn dynarmic_new<'a>(ud: *mut c_void, callbacks: &Callbacks, page_table: Option<*const [Option<*mut u8>; NUM_PAGE_TABLE_ENTRIES]>) -> &'a mut Jit;
+    pub fn dynarmic_new<'a>(ud: *mut c_void, callbacks: &Callbacks, page_table: *const [*mut u8; NUM_PAGE_TABLE_ENTRIES]) -> &'a mut Jit;
     pub fn dynarmic_delete(jit: &mut Jit);
     pub fn dynarmic_get_userdata(jit: &Jit) -> *mut c_void;
     pub fn dynarmic_run(jit: &mut Jit);
@@ -165,7 +165,7 @@ mod tests {
             dynarmic_new(
                 context.as_mut() as *mut Context as *mut _,
                 &callbacks,
-                None
+                std::ptr::null(),
             )
         };
 

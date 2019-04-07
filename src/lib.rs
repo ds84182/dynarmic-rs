@@ -139,7 +139,7 @@ impl<H: Handlers> Executor<H> {
             dynarmic_new(
                 context.as_mut() as *mut Context<H> as *mut _,
                 &callbacks,
-                None
+                std::ptr::null(),
             )
         };
 
