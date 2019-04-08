@@ -1,8 +1,10 @@
 #include <array>
 #include <cstdint>
+#include <optional>
 
 #include <dynarmic/A32/a32.h>
 #include <dynarmic/A32/config.h>
+#include <dynarmic/A32/coprocessor.h>
 
 using u8 = std::uint8_t;
 using u16 = std::uint16_t;
@@ -103,14 +105,188 @@ public:
   Jit* jit = nullptr;
 };
 
+class RustCoprocessor : public Dynarmic::A32::Coprocessor {
+public:
+  using Jit = Dynarmic::A32::Jit; // Interchangable with JitContext
+
+  using RawCallbackFn = u64(*)(Jit*, void*, u32, u32);
+
+  struct RawCallback {
+    RawCallbackFn func;
+    void *user_data;
+  };
+
+  enum class CallbackOrAccessTag {
+    None, Callback, Access
+  };
+
+  template <typename T>
+  struct CallbackOrAccess {
+    CallbackOrAccessTag tag;
+    union {
+      RawCallback callback;
+      T access;
+    };
+  };
+
+  using CoprocReg = Dynarmic::A32::CoprocReg;
+
+  template <typename T>
+  struct Option {
+    bool some;
+    T value;
+
+    static Option<T> Some(T value) {
+      Option v;
+      v.some = true;
+      v.value = value;
+      return v;
+    }
+
+    static Option<T> None() {
+      Option v;
+      v.some = false;
+      return v;
+    }
+  };
+
+  using Callback = Option<RawCallback>; // except nullable
+
+  struct CallbackData {
+    void *user_data;
+    Callback (*compile_internal_operation)(const void *self, bool two, u32 opc1, CoprocReg cr_d, CoprocReg cr_n, CoprocReg cr_m, u32 opc2);
+    CallbackOrAccess<u32*> (*compile_send_one_word)(const void *self, bool two, u32 opc1, CoprocReg cr_n, CoprocReg cr_m, u32 opc2);
+    CallbackOrAccess<std::array<u32*, 2>> (*compile_send_two_words)(const void *self, bool two, u32 opc, CoprocReg cr_m);
+    CallbackOrAccess<const u32*> (*compile_get_one_word)(const void *self, bool two, u32 opc1, CoprocReg cr_n, CoprocReg cr_m, u32 opc2);
+    CallbackOrAccess<std::array<const u32*, 2>> (*compile_get_two_words)(const void *self, bool two, u32 opc, CoprocReg cr_m);
+    Callback (*compile_load_words)(const void *self, bool two, bool long_transfer, CoprocReg cr_d, Option<u8> option);
+    Callback (*compile_store_words)(const void *self, bool two, bool long_transfer, CoprocReg cr_d, Option<u8> option);
+    void (*destroy)(void *self);
+  };
+
+  CallbackData callback_data;
+
+  using Cp = Dynarmic::A32::Coprocessor;
+
+  RustCoprocessor(CallbackData *cd) : callback_data(*cd) {}
+
+  virtual ~RustCoprocessor() {
+    callback_data.destroy(callback_data.user_data);
+  }
+
+  virtual std::optional<Cp::Callback> CompileInternalOperation(bool two, unsigned opc1, CoprocReg CRd, CoprocReg CRn, CoprocReg CRm, unsigned opc2) override {
+    auto cb = callback_data.compile_internal_operation(callback_data.user_data, two, opc1, CRd, CRn, CRm, opc2);
+
+    if (cb.some) {
+      return std::optional(Cp::Callback {
+        cb.value.func,
+        cb.value.user_data,
+      });
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  virtual Cp::CallbackOrAccessOneWord CompileSendOneWord(bool two, unsigned opc1, CoprocReg CRn, CoprocReg CRm, unsigned opc2) override {
+    auto cb = callback_data.compile_send_one_word(callback_data.user_data, two, opc1, CRn, CRm, opc2);
+
+    switch (cb.tag) {
+      case CallbackOrAccessTag::None:
+        return boost::blank {};
+      case CallbackOrAccessTag::Callback:
+        return Cp::Callback {
+          cb.callback.func,
+          cb.callback.user_data
+        };
+      case CallbackOrAccessTag::Access:
+        return cb.access;
+    }
+  }
+
+  virtual Cp::CallbackOrAccessTwoWords CompileSendTwoWords(bool two, unsigned opc, CoprocReg CRm) override {
+    auto cb = callback_data.compile_send_two_words(callback_data.user_data, two, opc, CRm);
+
+    switch (cb.tag) {
+      case CallbackOrAccessTag::None:
+        return boost::blank {};
+      case CallbackOrAccessTag::Callback:
+        return Cp::Callback {
+          cb.callback.func,
+          cb.callback.user_data
+        };
+      case CallbackOrAccessTag::Access:
+        return cb.access;
+    }
+  }
+
+  virtual Cp::CallbackOrAccessOneWord CompileGetOneWord(bool two, unsigned opc1, CoprocReg CRn, CoprocReg CRm, unsigned opc2) override {
+    auto cb = callback_data.compile_get_one_word(callback_data.user_data, two, opc1, CRn, CRm, opc2);
+
+    switch (cb.tag) {
+      case CallbackOrAccessTag::None:
+        return boost::blank {};
+      case CallbackOrAccessTag::Callback:
+        return Cp::Callback {
+          cb.callback.func,
+          cb.callback.user_data
+        };
+      case CallbackOrAccessTag::Access:
+        return const_cast<u32*>(cb.access);
+    }
+  }
+
+  virtual Cp::CallbackOrAccessTwoWords CompileGetTwoWords(bool two, unsigned opc, CoprocReg CRm) override {
+    auto cb = callback_data.compile_get_two_words(callback_data.user_data, two, opc, CRm);
+
+    switch (cb.tag) {
+      case CallbackOrAccessTag::None:
+        return boost::blank {};
+      case CallbackOrAccessTag::Callback:
+        return Cp::Callback {
+          cb.callback.func,
+          cb.callback.user_data
+        };
+      case CallbackOrAccessTag::Access:
+        return *reinterpret_cast<std::array<u32*, 2>*>(&cb.access);
+    }
+  }
+
+  virtual std::optional<Cp::Callback> CompileLoadWords(bool two, bool long_transfer, CoprocReg CRd, std::optional<std::uint8_t> option) override {
+    auto cb = callback_data.compile_load_words(callback_data.user_data, two, long_transfer, CRd, option.has_value() ? Option<u8>::Some(option.value()) : Option<u8>::None());
+
+    if (cb.some) {
+      return std::optional(Cp::Callback {
+        cb.value.func,
+        cb.value.user_data,
+      });
+    } else {
+      return std::nullopt;
+    }
+  }
+
+  virtual std::optional<Cp::Callback> CompileStoreWords(bool two, bool long_transfer, CoprocReg CRd, std::optional<std::uint8_t> option) override {
+    auto cb = callback_data.compile_store_words(callback_data.user_data, two, long_transfer, CRd, option.has_value() ? Option<u8>::Some(option.value()) : Option<u8>::None());
+
+    if (cb.some) {
+      return std::optional(Cp::Callback {
+        cb.value.func,
+        cb.value.user_data,
+      });
+    } else {
+      return std::nullopt;
+    }
+  }
+};
+
 struct JitWrapper {
-  void *user_data;
+  // JIT structure needs to be first so we can convert Jit* into JitWrapper*
   Dynarmic::A32::Jit jit;
+  void *user_data;
 
   JitWrapper(void *ud, Dynarmic::A32::UserConfig config) : user_data(ud), jit(config) {}
 };
 
-extern "C" JitWrapper *dynarmic_new(void *user_data, RustCallbacks::CallbackData *callbacks, std::array<u8*, Dynarmic::A32::UserConfig::NUM_PAGE_TABLE_ENTRIES> *page_table) {
+extern "C" JitWrapper *dynarmic_new(void *user_data, RustCallbacks::CallbackData *callbacks, std::array<u8*, Dynarmic::A32::UserConfig::NUM_PAGE_TABLE_ENTRIES> *page_table, std::array<RustCoprocessor::CallbackData*, 16> *coprocessors) {
   auto dynarmicCallbacks = new RustCallbacks();
   dynarmicCallbacks->callbacks = *callbacks;
 
@@ -118,6 +294,15 @@ extern "C" JitWrapper *dynarmic_new(void *user_data, RustCallbacks::CallbackData
 
   config.callbacks = dynarmicCallbacks;
   config.page_table = page_table;
+
+  if (coprocessors) {
+    for (int i=0; i<16; i++) {
+      auto cp = coprocessors->at(i);
+      if (cp) {
+        config.coprocessors[i] = std::make_shared<RustCoprocessor>(cp);
+      }
+    }
+  }
 
   auto jit = new JitWrapper(
     user_data,

@@ -88,7 +88,6 @@ pub trait IOPage {
 
 impl PageSpanKind {
     fn read<T: Primitive>(&self, offset: usize) -> T {
-        let offset = offset & !T::ALIGN;
         match self {
             PageSpanKind::Normal { backing } => {
                 let bytes = backing.replace(Box::new([]));
@@ -108,7 +107,6 @@ impl PageSpanKind {
     }
 
     fn write<T: Primitive>(&self, offset: usize, value: T) {
-        let offset = offset & !T::ALIGN;
         match self {
             PageSpanKind::Normal { backing } => {
                 let mut bytes = backing.replace(Box::new([]));

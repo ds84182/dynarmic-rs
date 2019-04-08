@@ -11,6 +11,10 @@ pub trait Handlers: Sized {
     fn memory(&self) -> &Self::Memory;
     
     fn handle_svc(&mut self, _context: JitContext, _swi: u32) {}
+
+    fn make_coprocessors<'jit>(&'jit mut self) -> Option<[Option<coproc::CoprocessorCallbacks<'jit>>; 16]> {
+        None
+    }
 }
 
 pub struct Context<H: Handlers> {
@@ -125,31 +129,47 @@ impl<H: Handlers> Context<H> {
     }
 }
 
+pub mod coproc {
+    pub use dynarmic_sys::coprocessor::*;
+}
+
 pub struct Executor<H: Handlers> {
     jit: &'static mut Jit,
-    _context: Box<Context<H>>,
+    context: *mut Context<H>,
 }
 
 impl<H: Handlers> Executor<H> {
     pub fn new(handlers: H) -> Self {
-        let mut context = Box::new(Context {
+        let mut context = Box::leak(Box::new(Context {
             handlers,
             ticks: std::u64::MAX,
-        });
+        }));
+
+        let context_ptr = context as *mut Context<H>;
 
         let callbacks = Context::<H>::callbacks();
 
+        let cp = context.handlers.make_coprocessors();
+
+        let cp_callbacks = cp.as_ref().map(|cp| [
+            cp[0].as_ref(), cp[1].as_ref(), cp[2].as_ref(), cp[3].as_ref(),
+            cp[4].as_ref(), cp[5].as_ref(), cp[6].as_ref(), cp[7].as_ref(),
+            cp[8].as_ref(), cp[9].as_ref(), cp[10].as_ref(), cp[11].as_ref(),
+            cp[12].as_ref(), cp[13].as_ref(), cp[14].as_ref(), cp[15].as_ref(),
+        ]);
+
         let jit = unsafe {
             dynarmic_new(
-                context.as_mut() as *mut Context<H> as *mut _,
+                context_ptr as *mut _,
                 &callbacks,
                 std::ptr::null(),
+                cp_callbacks.as_ref(),
             )
         };
 
         Executor {
             jit,
-            _context: context
+            context: context_ptr,
         }
     }
 
@@ -167,12 +187,14 @@ impl<H: Handlers> Executor<H> {
 impl<H: Handlers> Drop for Executor<H> {
     fn drop(&mut self) {
         unsafe { dynarmic_delete(self.jit) }
+        unsafe { Box::from_raw(self.context); }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::rc::Rc;
+    use std::cell::Cell;
     use super::*;
     #[test]
     fn it_works() {
@@ -186,6 +208,27 @@ mod tests {
             fn memory(&self) -> &Self::Memory {
                 &self.memory
             }
+
+            fn make_coprocessors<'jit>(&'jit mut self) -> Option<[Option<coproc::CoprocessorCallbacks<'jit>>; 16]> {
+                let mut cp: [Option<coproc::CoprocessorCallbacks<'jit>>; 16] = Default::default();
+
+                cp[15] = Some(coproc::CoprocessorCallbacks::callbacks_from(Box::new(Cp15 {
+                    tpidrurw: Cell::new(0xAFFFA),
+                })));
+
+                Some(cp)
+            }
+        }
+
+        struct Cp15 {
+            tpidrurw: Cell<u32>,
+        }
+
+        impl<'jit> coproc::Coprocessor<'jit> for Cp15 {
+            fn compile_get_one_word(&'jit self, two: bool, opc1: u32, cr_n: coproc::CoprocReg, cr_m: coproc::CoprocReg, opc2: u32) -> coproc::CallbackOrAccessOneWord<'jit> {
+                eprintln!("Called: {} {} {:?} {:?} {}", two, opc1, cr_n, cr_m, opc2);
+                coproc::CallbackOrAccess::Access(&self.tpidrurw)
+            }
         }
 
         let mut mem = memory::MemoryImpl::new();
@@ -193,6 +236,8 @@ mod tests {
         mem.map_memory(0x00000000, 1, true);
         mem.write(0, 0x0088u16);
         mem.write(2, 0xE7FEu16);
+        mem.write(4, 0xEE1D0F50u32); // mrc p15, 0, r0, c13, c0, 2
+        mem.write(8, 0xEAFFFFFEu32); // b 0
 
         let handlers = TestHandlers {
             memory: Rc::new(mem)
@@ -218,6 +263,25 @@ mod tests {
             let regs = context.regs();
             eprintln!("{:X?}", regs);
             assert_eq!(regs[0], 8);
+        }
+
+        {
+            let context = executor.context();
+
+            context.set_cpsr(0x10); // ARM mode
+
+            let mut regs = context.regs_mut();
+            regs[0] = 0;
+            regs[15] = 4; // PC = 4
+        }
+
+        executor.run();
+
+        {
+            let context = executor.context();
+            let regs = context.regs();
+            eprintln!("{:X?}", regs);
+            assert_eq!(regs[0], 0xAFFFA);
         }
     }
 }

@@ -1,5 +1,7 @@
 use std::ffi::c_void;
 
+pub mod coprocessor;
+
 #[repr(C)]
 pub struct Jit(c_void);
 
@@ -43,7 +45,7 @@ const PAGE_BITS: usize = 12;
 const NUM_PAGE_TABLE_ENTRIES: usize = 1 << (32 - PAGE_BITS);
 
 extern {
-    pub fn dynarmic_new<'a>(ud: *mut c_void, callbacks: &Callbacks, page_table: *const [*mut u8; NUM_PAGE_TABLE_ENTRIES]) -> &'a mut Jit;
+    pub fn dynarmic_new<'a>(ud: *mut c_void, callbacks: &Callbacks, page_table: *const [*mut u8; NUM_PAGE_TABLE_ENTRIES], coprocessors: Option<&[Option<&coprocessor::CoprocessorCallbacks>; 16]>) -> &'a mut Jit;
     pub fn dynarmic_delete(jit: &mut Jit);
     pub fn dynarmic_get_userdata(jit: &Jit) -> *mut c_void;
     pub fn dynarmic_run(jit: &mut Jit);
@@ -166,6 +168,7 @@ mod tests {
                 context.as_mut() as *mut Context as *mut _,
                 &callbacks,
                 std::ptr::null(),
+                None
             )
         };
 
